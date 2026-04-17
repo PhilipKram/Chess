@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chess Stats Dashboard</title>
+  <meta name="description" content="Personal chess stats, ratings, ranking and tournaments from chess.org.il." />
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='56'>%E2%99%9E</text></svg>" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="piece" aria-hidden="true">♞</span>
+      <span>Chess Stats</span>
+    </div>
+    <form id="player-form" class="player-form" autocomplete="off">
+      <label for="player-id">Player ID</label>
+      <input id="player-id" name="player-id" inputmode="numeric" pattern="\d+" value="207079" />
+      <button type="submit">Load</button>
+      <a id="source-link" href="https://www.chess.org.il/Players/Player.aspx?Id=207079" target="_blank" rel="noopener">View on chess.org.il ↗</a>
+    </form>
+  </header>
+
+  <main>
+    <section id="status" class="status" aria-live="polite"></section>
+
+    <section id="player-card" class="player-card hidden">
+      <div class="avatar" aria-hidden="true">
+        <span class="piece-large">♚</span>
+      </div>
+      <div class="identity">
+        <h1 id="player-name">—</h1>
+        <div class="meta" id="player-meta"></div>
+      </div>
+    </section>
+
+    <section class="ratings" id="ratings-section">
+      <h2>Ratings</h2>
+      <div class="rating-grid" id="rating-grid">
+        <!-- rating cards injected here -->
+      </div>
+    </section>
+
+    <section class="tournaments" id="tournaments-section">
+      <div class="tournaments-head">
+        <h2>Tournaments</h2>
+        <input id="tournament-search" type="search" placeholder="Search tournaments..." />
+      </div>
+      <div class="table-wrap">
+        <table id="tournaments-table">
+          <thead>
+            <tr id="tournaments-thead-row"><th>Tournament</th></tr>
+          </thead>
+          <tbody id="tournaments-tbody"></tbody>
+        </table>
+      </div>
+      <p id="tournaments-empty" class="empty hidden">No tournaments found.</p>
+    </section>
+
+    <details class="raw">
+      <summary>Debug · raw extracted data</summary>
+      <pre id="raw-json"></pre>
+    </details>
+  </main>
+
+  <footer>
+    <p>
+      Data is loaded directly in your browser from
+      <a href="https://www.chess.org.il" target="_blank" rel="noopener">chess.org.il</a>
+      via a public CORS proxy. This site is an unofficial viewer.
+    </p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
