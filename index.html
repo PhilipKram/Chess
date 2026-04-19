@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@300;400;500;600;700&family=Heebo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 
-<link rel="stylesheet" href="styles.css?v=9" />
+<link rel="stylesheet" href="styles.css?v=12" />
 </head>
 <body data-theme="modern">
 
@@ -20,21 +20,19 @@
     <div class="wordmark">
       <span class="knight">♞</span>
       <span>קאיסה</span>
-      <span class="wordmark-sub">כרטיס שחקן</span>
     </div>
     <nav>
       <a data-page="profile" class="active" href="#">פרופיל</a>
+      <a data-page="tournaments" href="#">טורנירים</a>
       <a data-page="games" href="#">משחקים</a>
-      <a>פתיחות</a>
-      <a>האיגוד</a>
     </nav>
     <div class="topbar-right">
       <form id="player-form" class="player-search" autocomplete="off">
         <label for="player-id">מס'</label>
-        <input id="player-id" name="player-id" inputmode="numeric" pattern="\d+" value="207079" dir="ltr" />
+        <input id="player-id" name="player-id" inputmode="numeric" pattern="\d+" dir="ltr" />
         <span class="sep"></span>
         <label for="chesscom-user">chess.com</label>
-        <input id="chesscom-user" name="chesscom-user" value="silverbullet20000" dir="ltr" />
+        <input id="chesscom-user" name="chesscom-user" dir="ltr" />
         <button type="submit">טעינה</button>
       </form>
     </div>
@@ -115,6 +113,16 @@
   </section>
 
   <section class="ledger">
+    <section class="active-tournaments hidden" id="active-tournaments">
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">טורנירים <em>פעילים</em></h2>
+          <div class="section-sub" id="active-tournaments-sub">מקרוב, עם שידור חי של היריבים והתוצאות.</div>
+        </div>
+      </div>
+      <div class="active-tournaments-body" id="active-tournaments-body"></div>
+    </section>
+
     <div class="section-head ledger-head">
       <div>
         <h2 class="section-title">היסטוריית <em>טורנירים</em></h2>
@@ -164,6 +172,6 @@
   </div>
 </footer>
 
-<script src="app.js?v=9"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>

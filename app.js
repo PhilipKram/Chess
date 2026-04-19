@@ -11,8 +11,29 @@
  * time series directly, and this is the only way to render a real chart.
  */
 
-const DEFAULT_ICF_ID = "207079";
-const DEFAULT_CHESSCOM_USER = "silverbullet20000";
+// Last-used player identifiers are persisted to localStorage on submit so
+// the form can re-populate on return visits without hardcoded defaults.
+const STORAGE_KEY = "caissa:last-player";
+
+function loadSaved() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return {
+      icfId: typeof parsed.icfId === "string" ? parsed.icfId : "",
+      chesscomUser: typeof parsed.chesscomUser === "string" ? parsed.chesscomUser : "",
+    };
+  } catch {
+    return {};
+  }
+}
+
+function saveSaved(icfId, chesscomUser) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ icfId, chesscomUser }));
+  } catch {}
+}
 
 // Public CORS proxies for chess.org.il, tried in order.
 const PROXIES = [
@@ -54,6 +75,10 @@ const els = {
   ledgerCount: document.getElementById("ledger-count"),
   search: document.getElementById("tournament-search"),
 
+  activeSection: document.getElementById("active-tournaments"),
+  activeBody: document.getElementById("active-tournaments-body"),
+  activeSub: document.getElementById("active-tournaments-sub"),
+
   sourceLinks: document.getElementById("source-links"),
   raw: document.getElementById("raw-json"),
 
@@ -68,18 +93,23 @@ const els = {
   navLinks: document.querySelectorAll(".topbar nav a[data-page]"),
 };
 
-// Profile-only sections that should be hidden when the Games page is active.
-const PROFILE_SECTIONS = [
-  document.querySelector(".hero"),
-  document.getElementById("icf-block"),
-  document.getElementById("com-block"),
-  document.getElementById("trajectory-section"),
-  document.querySelector(".ledger"),
-];
+// Sections grouped by the nav page that owns them. Routing hides every
+// section that doesn't belong to the active page.
+const PAGE_SECTIONS = {
+  profile: [
+    document.querySelector(".hero"),
+    document.getElementById("icf-block"),
+    document.getElementById("com-block"),
+    document.getElementById("trajectory-section"),
+  ],
+  tournaments: [document.querySelector(".ledger")],
+  games: [document.getElementById("games-page")],
+};
+const VALID_PAGES = Object.keys(PAGE_SECTIONS);
 
 const state = {
-  icfId: DEFAULT_ICF_ID,
-  chesscomUser: DEFAULT_CHESSCOM_USER,
+  icfId: "",
+  chesscomUser: "",
   icf: null,
   chesscom: null,
   range: "all",
@@ -88,6 +118,9 @@ const state = {
   gamesExpanded: new Set(),
   gamesYear: "all",    // "all" | "2026" | "2025" | …
   gamesSort: "recent", // "recent" | "played" | "rating"
+  // Active tournaments (pending rating update). Keyed off ICF id so we
+  // refetch when the user switches players.
+  active: null,        // { byIcfId, loading, details: Map<tournamentId, {games,error}> }
 };
 
 /* ================= BOOT ================= */
@@ -101,6 +134,7 @@ els.form.addEventListener("submit", (e) => {
     return;
   }
   updateHash(icfId, chesscomUser);
+  saveSaved(icfId, chesscomUser);
   state.icfId = icfId;
   state.chesscomUser = chesscomUser;
   load();
@@ -143,28 +177,32 @@ els.gamesSort.addEventListener("click", (e) => {
 
 window.addEventListener("DOMContentLoaded", () => {
   const params = parseHash();
-  state.icfId = params.id || DEFAULT_ICF_ID;
-  state.chesscomUser = params.user || DEFAULT_CHESSCOM_USER;
-  state.page = params.page === "games" ? "games" : "profile";
+  const saved = loadSaved();
+  state.icfId = params.id || saved.icfId || "";
+  state.chesscomUser = params.user || saved.chesscomUser || "";
+  state.page = VALID_PAGES.includes(params.page) ? params.page : "profile";
   els.icfInput.value = state.icfId;
   els.chesscomInput.value = state.chesscomUser;
   applyRoute();
-  load();
+  if (state.icfId || state.chesscomUser) load();
 });
 
 function navigate(page) {
-  state.page = page === "games" ? "games" : "profile";
+  state.page = VALID_PAGES.includes(page) ? page : "profile";
   updateHash(state.icfId, state.chesscomUser);
   applyRoute();
   if (state.page === "games") ensureGamesLoaded();
+  if (state.page === "tournaments") ensureActiveLoaded();
 }
 
 function applyRoute() {
-  const isGames = state.page === "games";
-  for (const el of PROFILE_SECTIONS) if (el) el.classList.toggle("hidden", isGames);
-  els.gamesPage.classList.toggle("hidden", !isGames);
+  for (const [page, sections] of Object.entries(PAGE_SECTIONS)) {
+    const show = state.page === page;
+    for (const el of sections) if (el) el.classList.toggle("hidden", !show);
+  }
   els.navLinks.forEach((a) => a.classList.toggle("active", a.dataset.page === state.page));
-  if (isGames) renderGames();
+  if (state.page === "games") renderGames();
+  if (state.page === "tournaments") renderActive();
 }
 
 function parseHash() {
@@ -197,6 +235,9 @@ async function load() {
   setStatus("טוען…", "loading");
   state.icf = null;
   state.chesscom = null;
+  state.active = null;
+  state.games = null;
+  state.gamesExpanded = new Set();
   // Reset view to a neutral state while the network calls are in flight.
   els.icfRow.innerHTML = "";
   els.comRow.innerHTML = "";
@@ -221,7 +262,10 @@ async function load() {
 
   // Render each block as soon as its source resolves so a slow or failed
   // source never blocks the rest of the dashboard.
-  icfP.then(() => { renderHero(); renderIcfBlock(); renderChart(); renderLedger(); });
+  icfP.then(() => {
+    renderHero(); renderIcfBlock(); renderChart(); renderLedger(); renderActive();
+    if (state.page === "tournaments") ensureActiveLoaded();
+  });
   ccP.then(() => { renderHero(); renderChessComBlock(); });
 
   await Promise.all([icfP, ccP]);
@@ -263,6 +307,13 @@ async function loadIcf(id) {
     }
   }
   if (!html) throw new Error("no proxy reachable (" + errors.join("; ") + ")");
+  // chess.org.il returns a generic ASP.NET "Runtime Error" page when the
+  // player id is unknown — size passes the 500-byte threshold but the page
+  // has none of the profile markers, so silent parse would yield an empty
+  // card. Detect it explicitly and surface a clear error.
+  if (/<title>\s*Runtime Error\s*<\/title>/i.test(html)) {
+    throw new Error(`מספר שחקן ${id} לא נמצא באיגוד`);
+  }
   return { ...parsePlayer(html), sourceUrl: targetUrl };
 }
 
@@ -1113,6 +1164,331 @@ function renderChart() {
   svg.appendChild(lab);
 }
 
+/* -------- Active tournaments (pending rating update) --------
+ * Pulls the per-tournament game detail page for every ledger row that has
+ * the "יחול בעדכון הבא" flag, so the Tournaments tab can show a live
+ * roster of opponents / rounds / standings before the rating is applied.
+ * Fetched lazily the first time the Tournaments tab is activated. */
+
+function pendingTournaments() {
+  const icf = state.icf && !state.icf.error ? state.icf : null;
+  const structured = icf?.tournaments?.structured || [];
+  return structured.filter((t) => t.pending && t.tournamentId);
+}
+
+async function ensureActiveLoaded() {
+  const icf = state.icf && !state.icf.error ? state.icf : null;
+  if (!icf) return;
+  const pending = pendingTournaments();
+  if (!pending.length) {
+    state.active = { byIcfId: state.icfId, details: new Map() };
+    renderActive();
+    return;
+  }
+  if (state.active && state.active.byIcfId === state.icfId) return;
+
+  state.active = { byIcfId: state.icfId, loading: true, total: pending.length, done: 0, details: new Map() };
+  renderActive();
+
+  await Promise.all(
+    pending.map((t) =>
+      fetchActiveTournament(t)
+        .then((r) => {
+          if (state.active?.byIcfId !== state.icfId) return;
+          state.active.details.set(t.tournamentId, {
+            games: r.games,
+            standings: r.standings,
+            standingsError: r.standingsError,
+          });
+          state.active.done++;
+          renderActive();
+        })
+        .catch((e) => {
+          if (state.active?.byIcfId !== state.icfId) return;
+          state.active.details.set(t.tournamentId, { error: e.message, games: [] });
+          state.active.done++;
+          renderActive();
+        })
+    )
+  );
+  if (state.active?.byIcfId === state.icfId) {
+    state.active.loading = false;
+    renderActive();
+  }
+}
+
+function renderActive() {
+  if (!els.activeSection) return;
+  const pending = pendingTournaments();
+  if (!pending.length) {
+    els.activeSection.classList.add("hidden");
+    els.activeBody.innerHTML = "";
+    return;
+  }
+  els.activeSection.classList.remove("hidden");
+
+  const loading = state.active?.loading;
+  els.activeSub.textContent = loading
+    ? `טוען פרטי ${state.active.total} טורנירים פעילים · ${state.active.done}/${state.active.total}`
+    : `${pending.length} ${pending.length === 1 ? "טורניר פעיל" : "טורנירים פעילים"} · ממתינים לעדכון דירוג הבא.`;
+
+  const myRating = state.icf?.ratings?.standard || null;
+
+  els.activeBody.innerHTML = "";
+  for (const t of pending) {
+    const detail = state.active?.details.get(t.tournamentId);
+    els.activeBody.appendChild(renderActiveCard(t, detail, myRating));
+  }
+}
+
+function renderActiveCard(t, detail, myRating) {
+  const card = document.createElement("div");
+  card.className = "active-card";
+
+  const parsedStart = t.startDateParsed;
+  const startLabel = parsedStart
+    ? `${parsedStart.getFullYear()} · ${parsedStart.toLocaleString("he-IL", { month: "short" })} ${String(parsedStart.getDate()).padStart(2, "0")}`
+    : t.startDate || "";
+
+  const tournamentLink = `https://www.chess.org.il/Tournaments/PlayerInTournament.aspx?Id=${esc(t.tournamentId)}`;
+
+  card.innerHTML = `
+    <div class="active-head">
+      <div class="active-title">
+        <span class="active-badge">פעיל</span>
+        <a class="active-name" href="${tournamentLink}" target="_blank" rel="noopener">${esc(t.name || "—")} ↗</a>
+      </div>
+      ${startLabel ? `<div class="active-start" dir="ltr">${esc(startLabel)}</div>` : ""}
+    </div>
+    <div class="active-body"></div>
+  `;
+
+  const body = card.querySelector(".active-body");
+
+  if (!detail) {
+    body.innerHTML = `<div class="active-games-msg">טוען פרטי טורניר…</div>`;
+    return card;
+  }
+  if (detail.error) {
+    body.innerHTML = `<div class="active-games-msg err">שגיאה בטעינה: ${esc(detail.error)}</div>`;
+    return card;
+  }
+  if (!detail.games.length) {
+    body.innerHTML = `<div class="active-games-msg">עדיין אין סיבובים.</div>`;
+    return card;
+  }
+
+  const played = detail.games.filter((g) => g.result === "win" || g.result === "loss" || g.result === "draw");
+  const upcoming = detail.games.filter((g) => g.result === "other" || !g.result);
+  const currentPoints = played.reduce(
+    (s, g) => s + (g.result === "win" ? 1 : g.result === "draw" ? 0.5 : 0), 0
+  );
+  const wins = played.filter((g) => g.result === "win").length;
+  const losses = played.filter((g) => g.result === "loss").length;
+  const draws = played.filter((g) => g.result === "draw").length;
+
+  const rating = myRating;
+  const perGameExp = upcoming.map((g) => ({
+    round: g.round,
+    opponentName: g.opponentName,
+    opponentRating: g.opponentRating,
+    color: g.color,
+    expected: rating && g.opponentRating ? eloExpected(rating, g.opponentRating) : null,
+  }));
+  const expectedRemaining = perGameExp.reduce((s, g) => s + (g.expected ?? 0.5), 0);
+  const expectedTotal = currentPoints + expectedRemaining;
+
+  // Standings-derived forecast.
+  let forecastHtml = "";
+  if (detail.standings && detail.standings.length) {
+    const me = detail.standings.find((p) => String(p.icfId) === String(state.icfId));
+    const currentRank = me ? me.rank : null;
+    const totalPlayers = detail.standings.length;
+    const totalRounds = Math.max(...detail.standings.map((p) => p.gamesPlayed));
+
+    const rankProbs = simulateTournament(detail.standings, state.icfId, 2000);
+    const pTop1 = rankProbs?.[0]?.prob ?? null;
+    const pTop3 = rankProbs ? rankProbs.slice(0, 3).reduce((s, r) => s + r.prob, 0) : null;
+    const pTopHalf = rankProbs
+      ? rankProbs.slice(0, Math.ceil(totalPlayers / 2)).reduce((s, r) => s + r.prob, 0)
+      : null;
+    const modeRank = rankProbs
+      ? rankProbs.reduce((best, r) => (r.prob > best.prob ? r : best), { rank: null, prob: 0 })
+      : null;
+
+    forecastHtml = `
+      <div class="active-forecast">
+        <div class="forecast-tile">
+          <div class="forecast-label">דירוג נוכחי</div>
+          <div class="forecast-value">${currentRank ? `#${currentRank}` : "—"}<span class="forecast-sub">/ ${totalPlayers}</span></div>
+        </div>
+        <div class="forecast-tile">
+          <div class="forecast-label">נקודות · צפויות</div>
+          <div class="forecast-value" dir="ltr">${formatScore(currentPoints)} → ${formatScore(expectedTotal)}</div>
+          <div class="forecast-sub">מתוך ${totalRounds}</div>
+        </div>
+        <div class="forecast-tile">
+          <div class="forecast-label">דירוג סופי צפוי</div>
+          <div class="forecast-value">${modeRank?.rank ? `#${modeRank.rank}` : "—"}</div>
+          <div class="forecast-sub">${modeRank ? `${Math.round(modeRank.prob * 100)}% שכיחות` : ""}</div>
+        </div>
+        <div class="forecast-tile">
+          <div class="forecast-label">סיכוי למקום ראשון</div>
+          <div class="forecast-value">${pTop1 != null ? formatPct(pTop1) : "—"}</div>
+        </div>
+        <div class="forecast-tile">
+          <div class="forecast-label">סיכוי לשלישייה</div>
+          <div class="forecast-value">${pTop3 != null ? formatPct(pTop3) : "—"}</div>
+        </div>
+        <div class="forecast-tile">
+          <div class="forecast-label">סיכוי למחצית העליונה</div>
+          <div class="forecast-value">${pTopHalf != null ? formatPct(pTopHalf) : "—"}</div>
+        </div>
+      </div>
+      ${renderRankBarHtml(rankProbs, currentRank)}
+    `;
+  } else if (detail.standingsError) {
+    forecastHtml = `<div class="active-games-msg err">לא ניתן לטעון דירוגי טורניר: ${esc(detail.standingsError)}</div>`;
+  }
+
+  const summaryHtml = `
+    <div class="active-summary">
+      <div class="active-summary-bit"><strong>${formatScore(currentPoints)}</strong> נק׳ אחרי ${played.length} משחקים</div>
+      <div class="active-wld" dir="ltr">
+        <span class="wld win">${wins}W</span>
+        <span class="wld draw">${draws}D</span>
+        <span class="wld loss">${losses}L</span>
+      </div>
+      ${upcoming.length ? `<div class="active-summary-bit">נותרו ${upcoming.length} · צפי <strong dir="ltr">${formatScore(expectedRemaining)}</strong> נק׳</div>` : ""}
+      ${t.performance ? `<div class="active-summary-bit">ביצוע <strong dir="ltr">${esc(t.performance)}</strong></div>` : ""}
+    </div>
+  `;
+
+  body.innerHTML = `
+    ${summaryHtml}
+    ${forecastHtml}
+    ${played.length ? `
+      <div class="active-subhead">משחקים שהתקיימו</div>
+      <div class="active-games-wrap" data-slot="played"></div>` : ""}
+    ${upcoming.length ? `
+      <div class="active-subhead">סיבובים הבאים · תחזית Elo</div>
+      <div class="active-games-wrap" data-slot="upcoming"></div>` : ""}
+  `;
+
+  if (played.length) {
+    body.querySelector('[data-slot="played"]').appendChild(renderPlayedTable(played));
+  }
+  if (upcoming.length) {
+    body.querySelector('[data-slot="upcoming"]').appendChild(renderUpcomingTable(perGameExp));
+  }
+  return card;
+}
+
+function formatScore(n) {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+function formatPct(p) {
+  if (p == null || !Number.isFinite(p)) return "—";
+  if (p > 0 && p < 0.005) return "<1%";
+  return `${Math.round(p * 100)}%`;
+}
+
+function renderPlayedTable(games) {
+  const wrap = document.createElement("div");
+  wrap.className = "active-games-inner";
+  const table = document.createElement("table");
+  table.className = "active-games-table";
+  table.innerHTML = `
+    <thead><tr>
+      <th>סיבוב</th><th>יריב</th><th class="num">דירוג</th><th>צבע</th><th>תוצאה</th>
+    </tr></thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+  for (const g of games) {
+    const tr = document.createElement("tr");
+    const label =
+      g.result === "win" ? "ניצחון" :
+      g.result === "loss" ? "הפסד" :
+      g.result === "draw" ? "תיקו" : "—";
+    const colorClass = /לבן|white/i.test(g.color || "") ? "white"
+      : /שחור|black/i.test(g.color || "") ? "black" : "";
+    const colorLabel = colorClass === "white" ? "לבן" : colorClass === "black" ? "שחור" : (g.color || "—");
+    tr.innerHTML = `
+      <td class="num">${esc(g.round ?? "—")}</td>
+      <td>${esc(g.opponentName || "—")}</td>
+      <td class="num">${g.opponentRating != null ? g.opponentRating : "—"}</td>
+      <td>${colorClass ? `<span class="games-color ${colorClass}">${esc(colorLabel)}</span>` : esc(colorLabel)}</td>
+      <td><span class="active-result ${g.result}">${label}</span></td>
+    `;
+    tbody.appendChild(tr);
+  }
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function renderUpcomingTable(perGameExp) {
+  const wrap = document.createElement("div");
+  wrap.className = "active-games-inner";
+  const table = document.createElement("table");
+  table.className = "active-games-table";
+  table.innerHTML = `
+    <thead><tr>
+      <th>סיבוב</th><th>יריב</th><th class="num">דירוג</th><th>צבע</th>
+      <th class="num">סיכוי ניצחון</th><th class="num">צפי נק׳</th>
+    </tr></thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+  const drawShare = 0.3;
+  for (const g of perGameExp) {
+    const tr = document.createElement("tr");
+    const colorClass = /לבן|white/i.test(g.color || "") ? "white"
+      : /שחור|black/i.test(g.color || "") ? "black" : "";
+    const colorLabel = colorClass === "white" ? "לבן" : colorClass === "black" ? "שחור" : (g.color || "—");
+    const winProb = g.expected != null
+      ? Math.max(0, Math.min(1 - drawShare, g.expected - drawShare / 2))
+      : null;
+    tr.innerHTML = `
+      <td class="num">${esc(g.round ?? "—")}</td>
+      <td>${esc(g.opponentName || "—")}</td>
+      <td class="num">${g.opponentRating != null ? g.opponentRating : "—"}</td>
+      <td>${colorClass ? `<span class="games-color ${colorClass}">${esc(colorLabel)}</span>` : esc(colorLabel)}</td>
+      <td class="num" dir="ltr">${winProb != null ? formatPct(winProb) : "—"}</td>
+      <td class="num" dir="ltr">${g.expected != null ? g.expected.toFixed(2) : "—"}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  wrap.appendChild(table);
+  return wrap;
+}
+
+/* Horizontal histogram of the simulated rank distribution.
+ * Highlights the current rank for visual anchoring. */
+function renderRankBarHtml(rankProbs, currentRank) {
+  if (!rankProbs || !rankProbs.length) return "";
+  const max = Math.max(...rankProbs.map((r) => r.prob));
+  if (!max) return "";
+  const bars = rankProbs.map((r) => {
+    const w = (r.prob / max) * 100;
+    const highlight = r.rank === currentRank ? " now" : "";
+    const label = r.prob >= 0.01 ? `${Math.round(r.prob * 100)}%` : "";
+    return `
+      <div class="rank-row${highlight}">
+        <div class="rank-label">#${r.rank}</div>
+        <div class="rank-bar"><div class="rank-fill" style="width:${w.toFixed(1)}%"></div></div>
+        <div class="rank-pct" dir="ltr">${label}</div>
+      </div>`;
+  }).join("");
+  return `
+    <details class="active-rank-dist">
+      <summary>התפלגות דירוג סופי · סימולציה (2000 ריצות)</summary>
+      <div class="rank-rows">${bars}</div>
+    </details>
+  `;
+}
+
 /* -------- Tournament ledger -------- */
 
 function renderLedger() {
@@ -1339,6 +1715,109 @@ async function fetchTournamentGames(tournament) {
     tournamentDate: tournament.startDateParsed,
     games: parseGamesTable(doc),
   };
+}
+
+/* Richer fetch for an in-progress tournament: also follows the link to the
+ * TournamentPage grid (all players + standings) so we can compute rank and
+ * finish-position probabilities. */
+async function fetchActiveTournament(tournament) {
+  const pitUrl = `https://www.chess.org.il/Tournaments/PlayerInTournament.aspx?Id=${tournament.tournamentId}`;
+  const pitHtml = await fetchViaProxy(pitUrl);
+  const pitDoc = new DOMParser().parseFromString(pitHtml, "text/html");
+  const games = parseGamesTable(pitDoc);
+
+  // Exclude TeamTournamentPage — the regex would otherwise match inside it
+  // and we'd end up fetching a team page that has no standings grid.
+  const m = pitHtml.match(/(?<![A-Za-z])TournamentPage\.aspx\?Id=(\d+)/);
+  let standings = null;
+  let standingsError = null;
+  if (m) {
+    try {
+      const tpUrl = `https://www.chess.org.il/Tournaments/TournamentPage.aspx?Id=${m[1]}`;
+      const tpHtml = await fetchViaProxy(tpUrl);
+      const tpDoc = new DOMParser().parseFromString(tpHtml, "text/html");
+      standings = parseStandingsTable(tpDoc);
+    } catch (e) {
+      standingsError = e.message;
+    }
+  }
+  return { tournamentId: tournament.tournamentId, games, standings, standingsError };
+}
+
+/* Parses the TournamentPage standings grid. Column layout (per the current
+ * ICF template): # | name | icfId | rating | fide | age | gender | games |
+ * points | performance | results | rating-change | h2h | berger | blackGames. */
+function parseStandingsTable(doc) {
+  const table = doc.querySelector('[id*="TournamentTableGrid"]');
+  if (!table) return null;
+  const rows = [...table.querySelectorAll("tr")].slice(1);
+  const players = [];
+  for (const r of rows) {
+    const cells = [...r.querySelectorAll("td")].map((c) => cleanText(c.textContent));
+    if (cells.length < 9) continue;
+    const rank = parseInt(cells[0], 10);
+    const icfId = cells[2];
+    const rating = parseInt(cells[3], 10) || null;
+    const gamesPlayed = parseInt(cells[7], 10) || 0;
+    const points = parseFloat(cells[8]) || 0;
+    if (isNaN(rank) || !icfId) continue;
+    players.push({
+      rank,
+      name: cells[1],
+      icfId,
+      rating,
+      gamesPlayed,
+      points,
+    });
+  }
+  return players;
+}
+
+/* Elo expected score against a single opponent: classic logistic with
+ * 400-point scale. Returns a value in [0,1] representing expected points. */
+function eloExpected(myRating, oppRating) {
+  if (!Number.isFinite(myRating) || !Number.isFinite(oppRating)) return 0.5;
+  return 1 / (1 + Math.pow(10, (oppRating - myRating) / 400));
+}
+
+/* Monte Carlo simulation of final standings. For each trial, every player's
+ * remaining games are simulated against a randomly-sampled other participant
+ * using an Elo win/draw/loss model (draw share ≈ 30%, splitting the expected
+ * score around that zone). Returns the rank distribution for `myIcfId`. */
+function simulateTournament(standings, myIcfId, trials = 2000) {
+  if (!standings || !standings.length) return null;
+  const totalRounds = Math.max(...standings.map((p) => p.gamesPlayed));
+  if (!totalRounds) return null;
+  const players = standings.map((p) => ({
+    icfId: p.icfId,
+    rating: p.rating || 1400,
+    points: p.points,
+    remaining: Math.max(0, totalRounds - p.gamesPlayed),
+  }));
+  const drawShare = 0.3;
+  const rankCounts = new Array(players.length + 1).fill(0);
+
+  for (let t = 0; t < trials; t++) {
+    const scores = players.map((p) => {
+      let s = p.points;
+      for (let g = 0; g < p.remaining; g++) {
+        const pool = players.filter((q) => q.icfId !== p.icfId);
+        const opp = pool[Math.floor(Math.random() * pool.length)];
+        const e = eloExpected(p.rating, opp.rating);
+        const winProb = Math.max(0, Math.min(1 - drawShare, e - drawShare / 2));
+        const r = Math.random();
+        if (r < winProb) s += 1;
+        else if (r < winProb + drawShare) s += 0.5;
+      }
+      return { icfId: p.icfId, score: s };
+    });
+    // Tie-break by small random jitter so equal scores split ranks.
+    scores.forEach((s) => (s.score += Math.random() * 1e-6));
+    scores.sort((a, b) => b.score - a.score);
+    const idx = scores.findIndex((s) => s.icfId === String(myIcfId));
+    if (idx >= 0) rankCounts[idx + 1]++;
+  }
+  return rankCounts.slice(1).map((count, i) => ({ rank: i + 1, prob: count / trials }));
 }
 
 async function fetchViaProxy(targetUrl) {
