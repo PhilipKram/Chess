@@ -1,88 +1,169 @@
 <!doctype html>
-<html lang="en">
+<html lang="he" dir="rtl">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Chess Stats Dashboard</title>
-  <meta name="description" content="Personal chess stats, ratings, ranking and tournaments from chess.org.il and chess.com." />
-  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='56'>%E2%99%9E</text></svg>" />
-  <link rel="stylesheet" href="styles.css" />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>סטטיסטיקת שחמט — קאיסה</title>
+<meta name="description" content="דירוגים, דירוג ארצי וטורנירים מאתרי chess.org.il ו־chess.com." />
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='56'>%E2%99%9E</text></svg>" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@300;400;500;600;700&family=Heebo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css?v=9" />
 </head>
-<body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="piece" aria-hidden="true">♞</span>
-      <span>Chess Stats</span>
+<body data-theme="modern">
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="wordmark">
+      <span class="knight">♞</span>
+      <span>קאיסה</span>
+      <span class="wordmark-sub">כרטיס שחקן</span>
     </div>
-    <form id="player-form" class="player-form" autocomplete="off">
-      <label for="player-id">ICF ID</label>
-      <input id="player-id" name="player-id" inputmode="numeric" pattern="\d+" value="207079" />
-      <label for="chesscom-user">Chess.com</label>
-      <input id="chesscom-user" name="chesscom-user" value="silverbullet20000" />
-      <button type="submit">Load</button>
-    </form>
-  </header>
+    <nav>
+      <a data-page="profile" class="active" href="#">פרופיל</a>
+      <a data-page="games" href="#">משחקים</a>
+      <a>פתיחות</a>
+      <a>האיגוד</a>
+    </nav>
+    <div class="topbar-right">
+      <form id="player-form" class="player-search" autocomplete="off">
+        <label for="player-id">מס'</label>
+        <input id="player-id" name="player-id" inputmode="numeric" pattern="\d+" value="207079" dir="ltr" />
+        <span class="sep"></span>
+        <label for="chesscom-user">chess.com</label>
+        <input id="chesscom-user" name="chesscom-user" value="silverbullet20000" dir="ltr" />
+        <button type="submit">טעינה</button>
+      </form>
+    </div>
+  </div>
+</header>
 
-  <main>
-    <section id="status" class="status" aria-live="polite"></section>
+<main>
+  <div id="status" class="status" aria-live="polite"></div>
 
-    <section id="player-card" class="player-card hidden">
-      <div class="avatar" aria-hidden="true">
-        <img id="player-avatar" alt="" class="hidden" />
-        <span id="player-piece" class="piece-large">♚</span>
+  <section class="hero">
+    <div class="hero-text">
+      <div class="hero-breadcrumb">
+        <span>האיגוד הישראלי לשחמט</span>
+        <span class="sep">/</span>
+        <span>שחקנים</span>
+        <span class="sep">/</span>
+        <span class="id" id="hero-id" dir="ltr">#—</span>
+        <span class="sep">·</span>
+        <span id="hero-fide-id" dir="ltr">FIDE —</span>
       </div>
-      <div class="identity">
-        <h1 id="player-name">—</h1>
-        <div class="meta" id="player-meta"></div>
-        <div class="sources" id="player-sources"></div>
+
+      <h1 class="hero-name">
+        <span class="first">פרופיל שחקן</span>
+        <span id="hero-display-name">—</span>
+      </h1>
+
+      <div class="hero-titles" id="hero-titles"></div>
+
+      <dl class="hero-bio" id="hero-bio"></dl>
+    </div>
+
+    <div class="hero-viz">
+      <div class="peak-overlay">
+        <div class="crown-mark">♛</div>
+        <div class="peak-label" id="peak-label">שיא רגיל</div>
+        <div class="peak-value" id="peak-value" dir="ltr">—</div>
+        <div class="peak-sub" id="peak-sub">—</div>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <section class="ratings" id="icf-section">
-      <h2>Israeli Chess Federation</h2>
-      <p id="icf-status" class="section-status"></p>
-      <div class="rating-grid" id="icf-rating-grid"></div>
-    </section>
+  <section class="ratings-block" id="icf-block">
+    <div class="ratings-header">
+      <span class="src-badge icf"><span class="src-dot"></span>האיגוד הישראלי · ICF</span>
+      <span class="src-meta" id="icf-meta">chess.org.il · דירוגים רשמיים</span>
+    </div>
+    <div class="ratings-row" id="ratings-row-icf"></div>
+  </section>
 
-    <section class="ratings" id="chesscom-section">
-      <h2>Chess.com</h2>
-      <p id="chesscom-status" class="section-status"></p>
-      <div class="rating-grid" id="chesscom-rating-grid"></div>
-      <div class="records" id="chesscom-records"></div>
-    </section>
+  <section class="ratings-block" id="com-block">
+    <div class="ratings-header">
+      <span class="src-badge com"><span class="src-dot"></span>chess.com</span>
+      <span class="src-meta" id="com-meta">משחק מקוון · דירוג גלוקו</span>
+    </div>
+    <div class="ratings-row" id="ratings-row-com"></div>
+  </section>
 
-    <section class="tournaments" id="tournaments-section">
-      <div class="tournaments-head">
-        <h2>Tournaments · ICF</h2>
-        <input id="tournament-search" type="search" placeholder="Search tournaments..." />
+  <section class="trajectory" id="trajectory-section">
+    <div class="section-head">
+      <div>
+        <h2 class="section-title">מסלול <em>הדירוג</em></h2>
+        <div class="section-sub" id="trajectory-sub">מד כושר רגיל משוחזר מהיסטוריית הטורנירים.</div>
       </div>
-      <div class="table-wrap">
-        <table id="tournaments-table">
-          <thead>
-            <tr id="tournaments-thead-row"><th>Tournament</th></tr>
-          </thead>
-          <tbody id="tournaments-tbody"></tbody>
-        </table>
+      <div class="chart-toolbar" id="chart-toolbar">
+        <button data-range="all" class="active">הכל</button>
+        <button data-range="5y">5 שנים</button>
+        <button data-range="2y">שנתיים</button>
+        <button data-range="1y">שנה</button>
       </div>
-      <p id="tournaments-empty" class="empty hidden">No tournaments found.</p>
-    </section>
+    </div>
+    <div class="chart-frame">
+      <svg class="chart-svg" id="chart-svg" viewBox="0 0 1200 320" preserveAspectRatio="none"></svg>
+      <div class="chart-legend" id="chart-legend">
+        <div class="legend-item"><span class="legend-swatch standard"></span>רגיל</div>
+      </div>
+      <p id="chart-empty" class="chart-empty hidden">אין מספיק נתוני טורנירים לשחזור היסטוריית הדירוג.</p>
+    </div>
+  </section>
 
-    <details class="raw">
-      <summary>Debug · raw extracted data</summary>
-      <pre id="raw-json"></pre>
-    </details>
-  </main>
+  <section class="ledger">
+    <div class="section-head ledger-head">
+      <div>
+        <h2 class="section-title">היסטוריית <em>טורנירים</em></h2>
+        <div class="section-sub" id="ledger-count">כל האירועים הרשומים, מהחדש לישן.</div>
+      </div>
+      <input id="tournament-search" class="ledger-search" type="search" placeholder="חפש טורניר, שנה, מיקום…" />
+    </div>
+    <table class="ledger-table" id="ledger-table">
+      <thead>
+        <tr id="ledger-thead"></tr>
+      </thead>
+      <tbody id="ledger-tbody"></tbody>
+    </table>
+    <p id="ledger-empty" class="ledger-empty hidden">לא נמצאו טורנירים תואמים.</p>
+  </section>
 
-  <footer>
-    <p>
-      Data is loaded directly in your browser from
-      <a href="https://www.chess.org.il" target="_blank" rel="noopener">chess.org.il</a>
-      (via a public CORS proxy) and the
-      <a href="https://www.chess.com/news/view/published-data-api" target="_blank" rel="noopener">chess.com public API</a>.
-      This site is an unofficial viewer.
-    </p>
-  </footer>
+  <section class="games-page hidden" id="games-page">
+    <div class="section-head">
+      <div>
+        <h2 class="section-title">משחקים <em>מול יריבים</em></h2>
+        <div class="section-sub" id="games-sub">משוחזר מכל טורנירי האיגוד הרשומים.</div>
+      </div>
+      <input id="games-search" class="ledger-search" type="search" placeholder="חפש יריב או טורניר…" />
+    </div>
+    <div class="games-controls">
+      <div class="chart-toolbar" id="games-year-filter"></div>
+      <div class="chart-toolbar" id="games-sort">
+        <button data-sort="recent" class="active">לפי תאריך</button>
+        <button data-sort="played">לפי כמות משחקים</button>
+        <button data-sort="rating">לפי דירוג</button>
+      </div>
+    </div>
+    <div class="games-summary" id="games-summary"></div>
+    <div class="games-body" id="games-body"></div>
+  </section>
 
-  <script src="app.js"></script>
+  <details class="raw">
+    <summary>דיבאג · נתונים גולמיים</summary>
+    <pre id="raw-json" dir="ltr"></pre>
+  </details>
+</main>
+
+<footer>
+  <div class="footer-inner">
+    <div>קאיסה · צופה בלתי-רשמי של <a class="footer-link" href="https://www.chess.org.il" target="_blank" rel="noopener">chess.org.il</a> ו־<a class="footer-link" href="https://www.chess.com/news/view/published-data-api" target="_blank" rel="noopener">ה־API של chess.com</a></div>
+    <div id="source-links"></div>
+  </div>
+</footer>
+
+<script src="app.js?v=9"></script>
 </body>
 </html>
